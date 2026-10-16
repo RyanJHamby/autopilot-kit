@@ -1,0 +1,65 @@
+# autopilot-kit reusable workflow: merges tier-0 PRs the owner has opted into. Zero tokens.
+# Runs on the default branch copy (never PR code). The policy is read from the base branch; PR content is only diffed.
+name: automerge
+
+on:
+  workflow_call:
+    inputs:
+      kit_repo: {type: string, required: true}
+      kit_ref:  {type: string, required: true}
+      pr:       {type: string, required: false, default: ""}
+      head_sha: {type: string, required: false, default: ""}
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: vars.AUTOPILOT_ENABLED == 'true' && vars.AUTOPILOT_PAUSED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: fetch kit (pinned, verified)
+        env:
+          KIT_REPO: ${{ inputs.kit_repo }}
+          KIT_REF: ${{ inputs.kit_ref }}
+        run: |
+          case "$KIT_REF" in ""|*[!0-9a-f]*) echo "::error::kit_ref must be a full commit sha"; exit 1;; esac
+          [ "${#KIT_REF}" = 40 ] || { echo "::error::kit_ref must be 40 hex chars"; exit 1; }
+          case "$KIT_REPO" in */*) ;; *) echo "::error::kit_repo must be owner/name"; exit 1;; esac
+          D="$RUNNER_TEMP/kit"
+          git init -q "$D"
+          git -C "$D" fetch -q --depth 1 "https://github.com/${KIT_REPO}.git" "$KIT_REF"
+          git -C "$D" checkout -q FETCH_HEAD
+          [ "$(git -C "$D" rev-parse HEAD)" = "$KIT_REF" ] || { echo "::error::kit sha mismatch"; exit 1; }
+          echo "KIT=$D" >> "$GITHUB_ENV"
+      - run: pip install --quiet pyyaml
+      - name: merge eligible PRs
+        env:
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          [ -f .autopilot/merge-policy.yaml ] || { echo "no merge-policy; nothing to do"; exit 0; }
+          cp .autopilot/merge-policy.yaml "$RUNNER_TEMP/merge-policy.yaml"
+          if [ -n "$PR" ]; then
+            case "$PR" in *[!0-9]*) echo "::error::bad pr"; exit 1;; esac
+            python "$KIT/runtime/automerge.py" --pr "$PR" --head-sha "$HEAD_SHA" --policy "$RUNNER_TEMP/merge-policy.yaml" --base "origin/$DEFAULT_BRANCH"
+          else
+            gh pr list --state open --limit 30 --json number,headRefOid,headRefName \
+              --jq '.[]|select(.headRefName|startswith("agent/") or startswith("dependabot/"))|"\(.number) \(.headRefOid)"' |
+            while read -r n sha; do
+              python "$KIT/runtime/automerge.py" --pr "$n" --head-sha "$sha" --policy "$RUNNER_TEMP/merge-policy.yaml" --base "origin/$DEFAULT_BRANCH" || true
+            done
+          fi
