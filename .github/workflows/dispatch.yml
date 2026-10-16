@@ -1,0 +1,61 @@
+# autopilot-kit reusable workflow: cheap front door. Decides (zero tokens) whether an agent run may start, then fires
+# the repo's agent-exec.yml. Called by the thin agent-dispatch.yml in each repo.
+name: dispatch
+
+on:
+  workflow_call:
+    inputs:
+      issue:    {type: string, required: false, default: ""}
+      kit_repo: {type: string, required: true}
+      kit_ref:  {type: string, required: true}
+
+permissions: {}
+
+jobs:
+  dispatch:
+    # Only runs when the repo is enabled, not paused, and the actor is the repo owner (or cron).
+    if: >-
+      vars.AUTOPILOT_ENABLED == 'true' && vars.AUTOPILOT_PAUSED != 'true' &&
+      (github.event_name == 'schedule' || github.actor == github.repository_owner) &&
+      (github.event_name != 'issues' || github.event.label.name == 'agent-ready' || github.event.label.name == 'hard') &&
+      (github.event_name != 'issue_comment' || (!github.event.issue.pull_request && contains(github.event.comment.body, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: write        # needed to fire agent-exec.yml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_FROM_EVENT: ${{ github.event.issue.number }}
+      ISSUE_FROM_INPUT: ${{ inputs.issue }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: fetch kit (pinned, verified)
+        env:
+          KIT_REPO: ${{ inputs.kit_repo }}
+          KIT_REF: ${{ inputs.kit_ref }}
+        run: |
+          case "$KIT_REF" in ""|*[!0-9a-f]*) echo "::error::kit_ref must be a full commit sha"; exit 1;; esac
+          [ "${#KIT_REF}" = 40 ] || { echo "::error::kit_ref must be 40 hex chars"; exit 1; }
+          case "$KIT_REPO" in */*) ;; *) echo "::error::kit_repo must be owner/name"; exit 1;; esac
+          D="$RUNNER_TEMP/kit"
+          git init -q "$D"
+          git -C "$D" fetch -q --depth 1 "https://github.com/${KIT_REPO}.git" "$KIT_REF"
+          git -C "$D" checkout -q FETCH_HEAD
+          [ "$(git -C "$D" rev-parse HEAD)" = "$KIT_REF" ] || { echo "::error::kit sha mismatch"; exit 1; }
+          echo "KIT=$D" >> "$GITHUB_ENV"
+      - run: pip install --quiet pyyaml
+      - name: gate and dispatch
+        run: |
+          ISSUE="${ISSUE_FROM_INPUT:-$ISSUE_FROM_EVENT}"
+          case "$ISSUE" in
+            ""|*[!0-9]*) [ -z "$ISSUE" ] || { echo "::error::issue must be numeric"; exit 1; } ;;
+          esac
+          if [ -n "$ISSUE" ]; then
+            python "$KIT/runtime/gate.py" dispatch --issue "$ISSUE" --config .autopilot/repo.yaml
+          else
+            python "$KIT/runtime/gate.py" dispatch --config .autopilot/repo.yaml
+          fi

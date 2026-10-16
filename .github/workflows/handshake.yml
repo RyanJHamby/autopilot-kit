@@ -1,0 +1,43 @@
+# autopilot-kit reusable workflow: lints specs/*.md against the contract (deterministic, zero tokens).
+name: handshake
+
+on:
+  workflow_call:
+    inputs:
+      kit_repo: {type: string, required: true}
+      kit_ref:  {type: string, required: true}
+
+permissions: {}
+
+jobs:
+  handshake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: fetch kit (pinned, verified)
+        env:
+          KIT_REPO: ${{ inputs.kit_repo }}
+          KIT_REF: ${{ inputs.kit_ref }}
+        run: |
+          case "$KIT_REF" in ""|*[!0-9a-f]*) echo "::error::kit_ref must be a full commit sha"; exit 1;; esac
+          [ "${#KIT_REF}" = 40 ] || { echo "::error::kit_ref must be 40 hex chars"; exit 1; }
+          case "$KIT_REPO" in */*) ;; *) echo "::error::kit_repo must be owner/name"; exit 1;; esac
+          D="$RUNNER_TEMP/kit"
+          git init -q "$D"
+          git -C "$D" fetch -q --depth 1 "https://github.com/${KIT_REPO}.git" "$KIT_REF"
+          git -C "$D" checkout -q FETCH_HEAD
+          [ "$(git -C "$D" rev-parse HEAD)" = "$KIT_REF" ] || { echo "::error::kit sha mismatch"; exit 1; }
+          echo "KIT=$D" >> "$GITHUB_ENV"
+      - run: pip install --quiet pyyaml
+      - name: lint specs
+        run: |
+          SPECS=$(ls specs/*.md 2>/dev/null | grep -v '/_' || true)
+          [ -n "$SPECS" ] || { echo "no specs"; exit 0; }
+          # REJECTED fails the check; NEEDS-WORK is reported but does not block (--warn-only)
+          python "$KIT/runtime/handshake.py" $SPECS --config .autopilot/repo.yaml --warn-only
