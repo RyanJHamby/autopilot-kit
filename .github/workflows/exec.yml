@@ -102,6 +102,7 @@ jobs:
           echo "AGENT_BRANCH=$BR" >> "$GITHUB_ENV"
 
       - uses: anthropics/claude-code-action@34968b5981d5d170904281aa3df6f3c0d4a28855 # v1
+        id: agent
         env:
           CLAUDE_BRANCH: agent/${{ inputs.issue }}-${{ github.run_id }}
         with:
@@ -124,6 +125,14 @@ jobs:
             --max-turns ${{ inputs.max_turns }}
             --allowedTools "${{ steps.cfg.outputs.allowed_tools }}"
             --disallowedTools "mcp__claude_ai_*,mcp__plugin_*,mcp__github_comment__*,mcp__github_ci__*,mcp__github_inline_comment__*,WebSearch,Bash(curl:*),Bash(wget:*),Bash(gh api:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
+
+      # The action skips itself (still reporting success) when its workflow-validation rule fails, e.g. on a branch whose
+      # workflow differs from the default branch. A skipped agent must not look like a successful run.
+      - name: fail if the agent never ran
+        if: steps.agent.outputs.execution_file == ''
+        run: |
+          echo "::error::the Claude step produced no execution file; it was skipped or failed to start"
+          exit 1
 
       - name: remove empty agent branch
         if: always()
