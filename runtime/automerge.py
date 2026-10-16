@@ -3,7 +3,7 @@
 # (kit-managed file: host-repo lint rules do not apply)
 """Auto-merge for tier-0 PRs. Runs from a trusted workflow on the default branch copy; zero tokens.
 
-Merges PR N only if ALL hold: agent/* or dependabot PR, open, not draft, every other check green, tier.py says tier 0
+Merges PR N only if ALL hold: agent/*, dependabot or owner `autopilot/kit-*` PR, open, not draft, every other check green, tier.py says tier 0
 for a class the owner enabled in merge-policy.yaml (read from the base branch), and that class is not demoted.
 Merge method is a merge commit. Marks the merge with label `automerged:<class>` so history (and demotion) can be derived.
 
@@ -60,12 +60,36 @@ def history(gh=_gh) -> list[dict]:
     return out
 
 
+def approvals_repo(kit_repo: str) -> str:
+    """The owner's approvals live in a separate tiny repo `<owner>/autopilot-approved`, not in the kit repo, because the kit
+    repo is pushed to constantly (releases) while approvals must only ever change through an owner-reviewed PR."""
+    return kit_repo.split("/")[0] + "/autopilot-approved"
+
+
+def fetch_approved(kit_repo: str, opener=None) -> list[str]:
+    """Kit shas the owner approved: `APPROVED` on the approvals repo's default branch (ruleset: PR + owner review).
+    Any failure returns [] so the kit-bump class fails closed."""
+    import re
+    import urllib.request
+
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", kit_repo or ""):
+        return []
+    try:
+        opener = opener or (lambda u: urllib.request.urlopen(u, timeout=10).read().decode())
+        text = opener(f"https://raw.githubusercontent.com/{approvals_repo(kit_repo)}/main/APPROVED")
+    except Exception:
+        return []
+    return [ln.split()[0] for ln in text.splitlines() if re.match(r"^[0-9a-f]{40}(\s|$)", ln)]
+
+
 def decide(pr: dict, checks: list[dict], res: dict, enabled: list[str], demoted: dict[str, str]) -> tuple[bool, str]:
     if pr["state"] != "OPEN" or pr.get("isDraft"):
         return False, "not an open, ready PR"
     head = pr["headRefName"]
-    if not (head.startswith("agent/") or pr["author"]["login"] in ("dependabot", "app/dependabot")):
-        return False, "only agent/* and dependabot PRs are auto-merged"
+    owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
+    kit_bump = head.startswith("autopilot/kit-") and bool(owner) and pr["author"]["login"] == owner
+    if not (head.startswith("agent/") or kit_bump or pr["author"]["login"] in ("dependabot", "app/dependabot")):
+        return False, "only agent/*, dependabot and owner kit-bump PRs are auto-merged"
     bad = [c["name"] for c in checks if c.get("conclusion") not in OK]
     if bad:
         return False, f"checks not green: {bad}"
@@ -110,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         if (c.get("name") or "") != "automerge"
     ]
     _git("fetch", "-q", "origin", f"pull/{ns.pr}/head")  # data only: nothing from the PR is executed
+    policy = {**policy, "kit_approved": fetch_approved(os.environ.get("KIT_REPO", ""))}
     res = tier.classify(parse_diff(_git("diff", "-U0", "--no-color", "--no-renames", f"{ns.base}...FETCH_HEAD")), policy)
     dm = demote.demoted_classes(history())
     ok, why = decide(pr, checks, res, enabled, dm)

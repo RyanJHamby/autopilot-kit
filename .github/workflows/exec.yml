@@ -141,6 +141,20 @@ jobs:
           echo "::error::the Claude step produced no execution file; it was skipped or failed to start"
           exit 1
 
+      # A run that opens no PR and reports no blocker did nothing useful, whatever the action says. Flag it so the gate's
+      # circuit breaker and `ap retro` see it instead of counting a silent success.
+      - name: fail if the agent produced neither a PR nor a blocker report
+        if: steps.agent.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prs=$(gh pr list --head "$AGENT_BRANCH" --state all --json number --jq length)
+          blocked=$(gh issue view "$ISSUE" --json labels --jq '[.labels[].name]|index("needs-human")!=null')
+          if [ "$prs" = "0" ] && [ "$blocked" != "true" ]; then
+            echo "::error::agent ended with no PR and no needs-human blocker on issue #$ISSUE"
+            exit 1
+          fi
+
       - name: remove empty agent branch
         if: always()
         env:

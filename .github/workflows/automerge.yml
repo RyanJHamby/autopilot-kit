@@ -50,6 +50,7 @@ jobs:
         env:
           PR: ${{ inputs.pr }}
           HEAD_SHA: ${{ inputs.head_sha }}
+          KIT_REPO: ${{ inputs.kit_repo }}
         run: |
           [ -f .autopilot/merge-policy.yaml ] || { echo "no merge-policy; nothing to do"; exit 0; }
           cp .autopilot/merge-policy.yaml "$RUNNER_TEMP/merge-policy.yaml"
@@ -58,7 +59,7 @@ jobs:
             python "$KIT/runtime/automerge.py" --pr "$PR" --head-sha "$HEAD_SHA" --policy "$RUNNER_TEMP/merge-policy.yaml" --base "origin/$DEFAULT_BRANCH"
           else
             gh pr list --state open --limit 30 --json number,headRefOid,headRefName \
-              --jq '.[]|select(.headRefName|startswith("agent/") or startswith("dependabot/"))|"\(.number) \(.headRefOid)"' |
+              --jq '.[]|select(.headRefName|startswith("agent/") or startswith("dependabot/") or startswith("autopilot/kit-"))|"\(.number) \(.headRefOid)"' |
             while read -r n sha; do
               python "$KIT/runtime/automerge.py" --pr "$n" --head-sha "$sha" --policy "$RUNNER_TEMP/merge-policy.yaml" --base "origin/$DEFAULT_BRANCH" || true
             done

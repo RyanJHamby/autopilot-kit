@@ -10,7 +10,7 @@
 `auto_merge_classes` ships empty, so tier 0 never happens until the owner opts a class in (a loosening: it lives in
 git under CODEOWNERS). `eligible_class` is reported even when the class is not enabled, so the UI can suggest it.
 
-Classes: docs-only, tests-add-only, lockfile-patch (package-lock.json), generated (owner-listed globs).
+Classes: kit-bump (workflow caller pins only, to a sha the owner approved in the kit repo), docs-only, tests-add-only, lockfile-patch (package-lock.json), generated (owner-listed globs).
 (formatter-only needs a tool run, not a diff read, so it is not offered here.)
 
   tier.py --base origin/main [--head HEAD] [--policy .autopilot/merge-policy.yaml]
@@ -38,7 +38,7 @@ PROTECTED_TIER2 = DEFAULT_PROTECTED + [
     ".env*",
 ]
 DOC_GLOBS = ["*.md", "docs/**", "LICENSE", "LICENSE.*"]
-CLASSES = ["docs-only", "tests-add-only", "lockfile-patch", "generated"]
+CLASSES = ["docs-only", "tests-add-only", "lockfile-patch", "generated"]  # kit-bump is checked separately (protected paths)
 _WEAKEN_RE = re.compile(r"\.skip\b|\bxfail\b|\bskipif\b|\.only\b|@pytest\.mark\.skip|\bxit\(|\bxdescribe\(|\btodo\b", re.I)
 _VER_RE = re.compile(r'^\s*"version":\s*"(\d+)\.(\d+)\.(\d+)"[,]?\s*$')
 _LOCK_NOISE_RE = re.compile(r'^\s*"(resolved|integrity)":')
@@ -74,6 +74,36 @@ def _is_lock_patch(ch: FileChange) -> bool:
     return all(o[:2] == n[:2] and int(n[2]) > int(o[2]) for o, n in zip(old, new))
 
 
+KIT_CALLERS = {f".github/workflows/{n}.yml" for n in ("agent-exec", "agent-dispatch", "guard", "handshake", "automerge")}
+_SHA = re.compile(r"[0-9a-f]{40}")
+_MANIFEST_LINE = re.compile(r'^\s*"\.github/workflows/[\w.-]+\.yml":\s*"[0-9a-f]{64}",?\s*$')
+
+
+def _is_kit_bump(changes: list[FileChange], approved: set[str]) -> bool:
+    """True only when the diff is nothing but kit pin bumps to owner-approved shas: each caller line that changed differs
+    from its old line ONLY by a 40-hex sha, every new sha is on the approved list, and the manifest only re-hashes
+    workflow files. Anything else (a new step, a changed permission, a different repo) fails and stays tier 2."""
+    if not changes or not approved:
+        return False
+    for ch in changes:
+        if ch.status != "M":
+            return False
+        if ch.path == ".autopilot/manifest.json":
+            if not all(_MANIFEST_LINE.match(ln) for ln in ch.added + ch.removed):
+                return False
+        elif ch.path in KIT_CALLERS:
+            if len(ch.added) != len(ch.removed) or not ch.added:
+                return False
+            for old, new in zip(ch.removed, ch.added):
+                if _SHA.sub("X", old) != _SHA.sub("X", new) or not _SHA.search(new):
+                    return False
+                if not set(_SHA.findall(new)) <= approved:
+                    return False
+        else:
+            return False
+    return True
+
+
 def classify(changes: list[FileChange], policy: dict | None = None) -> dict:
     policy = policy or {}
     enabled = set(policy.get("auto_merge_classes") or [])
@@ -81,6 +111,14 @@ def classify(changes: list[FileChange], policy: dict | None = None) -> dict:
     generated = list(policy.get("generated_globs") or [])
     if not changes:
         return {"tier": 1, "class": "", "eligible_class": "", "reasons": ["empty diff"]}
+    approved = {x for x in (policy.get("kit_approved") or []) if isinstance(x, str) and _SHA.fullmatch(x)}
+    if "kit-bump" in enabled and _is_kit_bump(changes, approved):
+        return {
+            "tier": 0,
+            "class": "kit-bump",
+            "eligible_class": "kit-bump",
+            "reasons": ["pin bump to an owner-approved kit sha"],
+        }
     hits = [ch.path for ch in changes if _matches(ch.path, protected)]
     if hits:
         return {"tier": 2, "class": "", "eligible_class": "", "reasons": [f"protected path: {p}" for p in hits]}
