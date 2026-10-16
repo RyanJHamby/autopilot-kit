@@ -5,6 +5,7 @@
 workflow needs, as GITHUB_OUTPUT lines. Zero tokens. The agent never influences this: it runs before the model starts.
 
   node_version   set when package-lock.json exists (explicit `stack.node` in repo.yaml wins, then .nvmrc, then 20)
+  uv             "true" when uv.lock and pyproject.toml exist (the exec job installs uv and runs `uv sync --frozen`)
   allowed_tools  comma-separated --allowedTools list: BASE_TOOLS plus Bash(<cmd>:*) for each `commands:` entry
 """
 
@@ -52,6 +53,10 @@ def node_version(repo: Path, cfg: dict) -> str:
     return "20"
 
 
+def uses_uv(repo: Path) -> str:
+    return "true" if (repo / "uv.lock").exists() and (repo / "pyproject.toml").exists() else ""
+
+
 def allowed_tools(cfg: dict) -> str:
     tools = list(BASE_TOOLS)
     for c in cfg.get("commands") or []:
@@ -71,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = ap.parse_args(argv)
     repo = Path(ns.repo)
     cfg = yaml.safe_load((repo / ns.config).read_text()) or {}
-    out = {"node_version": node_version(repo, cfg), "allowed_tools": allowed_tools(cfg)}
+    out = {"node_version": node_version(repo, cfg), "uv": uses_uv(repo), "allowed_tools": allowed_tools(cfg)}
     for k, v in out.items():
         print(f"{k}={v}")
     dest = os.environ.get("GITHUB_OUTPUT")
