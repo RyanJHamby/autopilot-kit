@@ -73,6 +73,9 @@ def decide(
     tier = cfg.get("tier", "C")
     if mode == "dormant":
         return Decision(False, "repo is dormant")
+    hold = cfg.get("hold_until")
+    if hold and now < dt.datetime.fromisoformat(str(hold).replace("Z", "+00:00")):
+        return Decision(False, f"owner hold until {hold}")
     since = now - dt.timedelta(hours=24)
     # skipped/cancelled runs never reached the model, so they must not eat the daily budget
     recent = [
@@ -245,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", default=".autopilot/repo.yaml")
     ns = ap.parse_args(argv)
     cfg = _load_cfg(ns.config)
+    if os.environ.get("AUTOPILOT_HOLD_UNTIL"):  # repo variable set by the owner (UI or by hand); fails closed if unparseable
+        cfg["hold_until"] = os.environ["AUTOPILOT_HOLD_UNTIL"]
 
     if ns.cmd == "dispatch":
         cmd_dispatch(cfg, ns.issue)

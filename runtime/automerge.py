@@ -27,42 +27,34 @@ OK = {"success", "neutral", "skipped"}
 
 
 def _gh(*a: str):
-    out = subprocess.run(["gh", *a], check=True, capture_output=True, text=True).stdout
-    return json.loads(out) if out.strip() else []
+    r = subprocess.run(["gh", *a], capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"gh {' '.join(a[:3])} failed: {r.stderr.strip()[:300]}")
+    return json.loads(r.stdout) if r.stdout.strip() else []
 
 
 def history(gh=_gh) -> list[dict]:
-    """Merged PRs labelled automerged:<class>, with revert and red-main flags derived from GitHub."""
-    prs = gh(
-        "pr",
-        "list",
-        "--state",
-        "merged",
-        "--label",
-        "automerged",
-        "--limit",
-        "100",
-        "--json",
-        "number,labels,mergedAt,mergeCommit,title",
+    """Merged PRs labelled automerged:<class>, with revert and red-main flags derived from GitHub (REST only: the
+    workflow token lacks GraphQL status scopes)."""
+    prs = gh("api", "repos/{owner}/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc")
+    revert_text = " ".join(
+        (p.get("title") or "") + " " + (p.get("body") or "") for p in prs if (p.get("title") or "").startswith("Revert")
     )
-    reverts = gh("pr", "list", "--state", "all", "--search", "Revert in:title", "--limit", "100", "--json", "title,body")
-    revert_text = " ".join((r.get("title") or "") + " " + (r.get("body") or "") for r in reverts)
     out = []
     for p in prs:
-        cls = next((l["name"].split(":", 1)[1] for l in p["labels"] if l["name"].startswith("automerged:")), None)
-        if not cls or not p.get("mergedAt"):
+        cls = next((l["name"].split(":", 1)[1] for l in p.get("labels", []) if l["name"].startswith("automerged:")), None)
+        if not cls or not p.get("merged_at"):
             continue
-        sha = (p.get("mergeCommit") or {}).get("oid", "")
-        checks = (
-            gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs", "--jq", "[.check_runs[].conclusion]") if sha else []
-        )
+        sha = p.get("merge_commit_sha") or ""
+        runs = gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs") if sha else {}
+        concl = [c.get("conclusion") for c in (runs.get("check_runs", []) if isinstance(runs, dict) else [])]
         out.append(
             {
                 "class": cls,
-                "merged_at": p["mergedAt"],
+                "merged_at": p["merged_at"],
                 "sha": sha,
-                "reverted": f"#{p['number']}" in revert_text or (sha and sha[:7] in revert_text),
-                "main_red": any(c in ("failure", "timed_out") for c in checks),
+                "reverted": f"#{p['number']}" in revert_text or (bool(sha) and sha[:7] in revert_text),
+                "main_red": any(c in ("failure", "timed_out") for c in concl),
             }
         )
     return out
@@ -100,7 +92,14 @@ def main(argv: list[str] | None = None) -> int:
     if not enabled:
         print("no auto-merge classes enabled; nothing to do")
         return 0
-    pr = _gh("pr", "view", str(ns.pr), "--json", "state,isDraft,headRefName,headRefOid,author")
+    raw = _gh("api", f"repos/{{owner}}/{{repo}}/pulls/{ns.pr}")
+    pr = {
+        "state": raw["state"].upper(),
+        "isDraft": raw["draft"],
+        "headRefName": raw["head"]["ref"],
+        "headRefOid": raw["head"]["sha"],
+        "author": {"login": raw["user"]["login"]},
+    }
     if pr["headRefOid"] != ns.head_sha:
         print("head moved since the triggering run; skipping")
         return 0
@@ -116,10 +115,29 @@ def main(argv: list[str] | None = None) -> int:
     ok, why = decide(pr, checks, res, enabled, dm)
     print(("MERGE " if ok else "SKIP ") + why)
     if ok and not ns.dry_run:
-        subprocess.run(["gh", "label", "create", "automerged", "--force", "--color", "BFD4F2"], check=False)
-        subprocess.run(["gh", "label", "create", f"automerged:{why}", "--force", "--color", "BFD4F2"], check=False)
-        subprocess.run(["gh", "pr", "edit", str(ns.pr), "--add-label", f"automerged,automerged:{why}"], check=True)
-        subprocess.run(["gh", "pr", "merge", str(ns.pr), "--merge", "--match-head-commit", ns.head_sha], check=True)
+        # labels are the history demotion is derived from, so add them BEFORE merging
+        for lab in ("automerged", f"automerged:{why}"):
+            subprocess.run(
+                ["gh", "api", "repos/{owner}/{repo}/labels", "-f", f"name={lab}", "-f", "color=BFD4F2"], capture_output=True
+            )
+        _gh(
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{ns.pr}/labels",
+            "-f",
+            "labels[]=automerged",
+            "-f",
+            f"labels[]=automerged:{why}",
+        )
+        _gh(
+            "api",
+            "-X",
+            "PUT",
+            f"repos/{{owner}}/{{repo}}/pulls/{ns.pr}/merge",
+            "-f",
+            "merge_method=merge",
+            "-f",
+            f"sha={ns.head_sha}",
+        )
     return 0
 
 
