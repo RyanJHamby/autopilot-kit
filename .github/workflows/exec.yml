@@ -82,6 +82,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/issues/${ISSUE}/lock" --silent
 
+      # Claude Code >= 2.1.299 refuses to start with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 unless bubblewrap is available
+      # (the sandbox that keeps the OAuth token out of every subprocess). Install it; do NOT disable the scrub.
+      - name: sandbox dependencies (bubblewrap)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          # ubuntu 24.04 restricts unprivileged user namespaces by default; bubblewrap needs them
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bubblewrap ok"
+
       # Trusted code, not the agent, creates the work branch. The action's signed-commit tool commits to the
       # checked-out branch; without this it would target main, which the ruleset (correctly) rejects.
       - name: create agent branch
