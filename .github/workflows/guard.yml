@@ -45,3 +45,11 @@ jobs:
           case "$HEAD_REF" in agent/*|claude/*) AGENT=true ;; esac
           git show "origin/$BASE_REF:.autopilot/repo.yaml" > "$RUNNER_TEMP/repo.yaml" 2>/dev/null || cp .autopilot/repo.yaml "$RUNNER_TEMP/repo.yaml"
           python "$KIT/runtime/guard.py" --base "origin/$BASE_REF" --head HEAD --agent "$AGENT" --config "$RUNNER_TEMP/repo.yaml"
+      # Informational: risk tier of this PR from the base branch's merge policy. Nothing merges on this yet.
+      - name: classify risk tier
+        if: always()
+        run: |
+          git show "origin/$BASE_REF:.autopilot/merge-policy.yaml" > "$RUNNER_TEMP/merge-policy.yaml" 2>/dev/null || echo "auto_merge_classes: []" > "$RUNNER_TEMP/merge-policy.yaml"
+          R=$(python "$KIT/runtime/tier.py" --base "origin/$BASE_REF" --head HEAD --policy "$RUNNER_TEMP/merge-policy.yaml")
+          echo "$R"
+          echo "autopilot tier: \`$R\`" >> "$GITHUB_STEP_SUMMARY"
