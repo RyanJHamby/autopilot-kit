@@ -26,7 +26,7 @@ from dataclasses import dataclass
 DEFAULTS = {
     "models": {"triage": "haiku", "default": "sonnet", "hard": "opus"},
     "effort": {"triage": "low", "default": "medium", "hard": "high"},
-    "max_turns": {"standard": 25, "yolo": 60, "hard": 30, "triage": 5, "reviewer": 10},
+    "max_turns": {"standard": 40, "yolo": 60, "hard": 45, "triage": 5, "reviewer": 10},
     "runs_per_day": {"A": 2, "B": 1, "C": 0},
     "hard_runs_per_day": 1,
     "max_open_agent_prs": 3,
