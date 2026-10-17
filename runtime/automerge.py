@@ -33,9 +33,10 @@ def _gh(*a: str):
     return json.loads(r.stdout) if r.stdout.strip() else []
 
 
-def history(gh=_gh) -> list[dict]:
+def history(gh=None) -> list[dict]:
     """Merged PRs labelled automerged:<class>, with revert and red-main flags derived from GitHub (REST only: the
     workflow token lacks GraphQL status scopes)."""
+    gh = gh or _gh
     prs = gh("api", "repos/{owner}/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc")
     revert_text = " ".join(
         (p.get("title") or "") + " " + (p.get("body") or "") for p in prs if (p.get("title") or "").startswith("Revert")
@@ -75,8 +76,18 @@ def fetch_approved(kit_repo: str, opener=None) -> list[str]:
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", kit_repo or ""):
         return []
     try:
-        opener = opener or (lambda u: urllib.request.urlopen(u, timeout=10).read().decode())
-        text = opener(f"https://raw.githubusercontent.com/{approvals_repo(kit_repo)}/main/APPROVED")
+
+        def default(u: str) -> str:
+            # GitHub's contents API, not raw.githubusercontent.com: the raw CDN caches for minutes, so a fresh approval (or a
+            # revoked one) would not be seen promptly. A token (when present) only lifts the anonymous rate limit.
+            h = {"Accept": "application/vnd.github.raw+json", "User-Agent": "autopilot-kit"}
+            tok = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+            if tok:
+                h["Authorization"] = f"Bearer {tok}"
+            return urllib.request.urlopen(urllib.request.Request(u, headers=h), timeout=10).read().decode()
+
+        opener = opener or default
+        text = opener(f"https://api.github.com/repos/{approvals_repo(kit_repo)}/contents/APPROVED?ref=main")
     except Exception:
         return []
     return [ln.split()[0] for ln in text.splitlines() if re.match(r"^[0-9a-f]{40}(\s|$)", ln)]
@@ -127,12 +138,14 @@ def main(argv: list[str] | None = None) -> int:
     if pr["headRefOid"] != ns.head_sha:
         print("head moved since the triggering run; skipping")
         return 0
-    rollup = _gh("pr", "view", str(ns.pr), "--json", "statusCheckRollup")["statusCheckRollup"]
+    # REST check-runs on the head sha: `gh pr view --json statusCheckRollup` is GraphQL and the workflow token cannot read it
+    runs = _gh("api", f"repos/{{owner}}/{{repo}}/commits/{ns.head_sha}/check-runs?per_page=100")["check_runs"]
     checks = [
-        {"name": c.get("name") or c.get("context"), "conclusion": (c.get("conclusion") or "").lower() or "pending"}
-        for c in rollup
-        if (c.get("name") or "") != "automerge"
+        {"name": c["name"], "conclusion": c.get("conclusion") or "pending"} for c in runs if not c["name"].startswith("automerge")
     ]
+    if not checks:
+        print("SKIP no checks reported yet")
+        return 0
     _git("fetch", "-q", "origin", f"pull/{ns.pr}/head")  # data only: nothing from the PR is executed
     policy = {**policy, "kit_approved": fetch_approved(os.environ.get("KIT_REPO", ""))}
     res = tier.classify(parse_diff(_git("diff", "-U0", "--no-color", "--no-renames", f"{ns.base}...FETCH_HEAD")), policy)
