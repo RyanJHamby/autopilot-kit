@@ -37,6 +37,7 @@ COMMS_EXEMPT = [
     ".autopilot/**",
     ".claude/settings.json",
     ".claude/agents/**",
+    ".github/kit-proposer-settings.json",  # the proposer's deny rules name publish/send commands to forbid them
     "AGENTS.md",
     "CLAUDE.md",
     ".github/workflows/agent-*.yml",

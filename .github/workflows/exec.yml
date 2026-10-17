@@ -111,6 +111,9 @@ jobs:
       - uses: anthropics/claude-code-action@34968b5981d5d170904281aa3df6f3c0d4a28855 # v1
         id: agent
         env:
+          # Under the sandbox the runner's step-summary file is read-only (EROFS), which crashes vitest's github-actions
+          # reporter and any tool that writes a job summary. The run log still has everything.
+          GITHUB_STEP_SUMMARY: /dev/null
           CLAUDE_BRANCH: agent/${{ inputs.issue }}-${{ github.run_id }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

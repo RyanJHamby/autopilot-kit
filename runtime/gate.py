@@ -123,6 +123,24 @@ def inflight_issues(runs_raw: list[dict]) -> set[int]:
     return out
 
 
+def merged_agent_issues(pulls: list[dict]) -> set[int]:
+    """Issues that already have a merged PR from an `agent/<issue>-` branch (from REST pulls?state=closed).
+    A `Refs #N` PR leaves the issue open, so without this the chained dispatch would run it a second time."""
+    import re
+
+    out = set()
+    for p in pulls:
+        m = re.match(r"agent/(\d+)-", (p.get("head") or {}).get("ref") or "")
+        if m and p.get("merged_at"):
+            out.add(int(m.group(1)))
+    return out
+
+
+def skip_merged(issue: int, labels: set[str], merged: set[int]) -> bool:
+    """True when the issue's agent PR already merged and the owner has not asked for a `retry`."""
+    return issue in merged and "retry" not in labels
+
+
 def pick_issues(issues: list[dict], open_pr_branches: list[str], limit: int) -> list[int]:
     """Oldest agent-ready issues first (p0 before p1 before unlabeled), skipping held/in-flight ones."""
 
@@ -193,6 +211,12 @@ def cmd_dispatch(cfg: dict, issue: int | None, *, gh=None, run=None, sleep=None,
         names = {ln["name"] for ln in info.get("labels", [])}
         if names & SKIP_LABELS:
             print(f"::notice::issue #{n} is held ({sorted(names & SKIP_LABELS)}); skipping")
+            if not queue:
+                return dispatched
+            continue
+        pulls = gh("api", "repos/{owner}/{repo}/pulls?state=closed&per_page=100")
+        if skip_merged(n, names, merged_agent_issues(pulls)):
+            print(f"::notice::issue #{n} already has a merged agent PR (add label 'retry' to run again); skipping")
             if not queue:
                 return dispatched
             continue
