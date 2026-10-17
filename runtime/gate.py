@@ -109,6 +109,20 @@ def decide(
     return Decision(True, "ok", c["models"][key_m], c["effort"][key_e], int(turns), remaining=cap - len(recent))
 
 
+def inflight_issues(runs_raw: list[dict]) -> set[int]:
+    """Issues whose agent-exec run is queued or running (title `agent #N`). A second dispatch must not start the same issue
+    again: its branch exists but it has no PR yet, so the open-PR check cannot see it."""
+    import re
+
+    out = set()
+    for r in runs_raw:
+        if r.get("status") in ("queued", "in_progress", "waiting", "pending", "requested"):
+            m = re.search(r"agent #(\d+)", r.get("displayTitle") or "")
+            if m:
+                out.add(int(m.group(1)))
+    return out
+
+
 def pick_issues(issues: list[dict], open_pr_branches: list[str], limit: int) -> list[int]:
     """Oldest agent-ready issues first (p0 before p1 before unlabeled), skipping held/in-flight ones."""
 
@@ -153,6 +167,7 @@ def cmd_dispatch(cfg: dict, issue: int | None, *, gh=None, run=None, sleep=None,
         prs = gh("pr", "list", "--state", "open", "--limit", "100", "--json", "headRefName")
         branches = [p_["headRefName"] for p_ in prs]
         n_agent = sum(1 for b in branches if b.startswith("agent/"))
+        branches += [f"agent/{n}-inflight" for n in inflight_issues(runs_raw)]  # skip issues already running
         if queue is None:
             probe = decide(cfg, runs, n_agent, role="implementer")
             if not probe.allow:

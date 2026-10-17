@@ -13,10 +13,12 @@ permissions: {}
 
 jobs:
   dispatch:
-    # Only runs when the repo is enabled, not paused, and the actor is the repo owner (or cron).
+    # Only runs when the repo is enabled, not paused, and the trigger is the owner, the cron, or this repo's own agent-exec
+    # finishing (the chain: a finished run frees capacity, so the gate immediately looks for the next ready issue).
     if: >-
       vars.AUTOPILOT_ENABLED == 'true' && vars.AUTOPILOT_PAUSED != 'true' &&
-      (github.event_name == 'schedule' || github.actor == github.repository_owner) &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.actor == github.repository_owner) &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.name == 'agent-exec') &&
       (github.event_name != 'issues' || github.event.label.name == 'agent-ready' || github.event.label.name == 'hard') &&
       (github.event_name != 'issue_comment' || (!github.event.issue.pull_request && contains(github.event.comment.body, '@claude')))
     runs-on: ubuntu-latest
