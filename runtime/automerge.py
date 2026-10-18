@@ -13,6 +13,7 @@ Merge method is a merge commit. Marks the merge with label `automerged:<class>` 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -146,7 +147,13 @@ def main(argv: list[str] | None = None) -> int:
     if not checks:
         print("SKIP no checks reported yet")
         return 0
-    _git("fetch", "-q", "origin", f"pull/{ns.pr}/head")  # data only: nothing from the PR is executed
+    # data only: nothing from the PR is executed. The checkout keeps no credentials, so private repos need the token here.
+    tok = base64.b64encode(f"x-access-token:{os.environ.get('GH_TOKEN', '')}".encode()).decode()
+    try:
+        _git("-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {tok}", "fetch", "-q", "origin", f"pull/{ns.pr}/head")
+    except subprocess.CalledProcessError as e:
+        print(f"SKIP fetch failed: {e.stderr.strip()[:300]}")
+        return 0
     policy = {**policy, "kit_approved": fetch_approved(os.environ.get("KIT_REPO", ""))}
     res = tier.classify(parse_diff(_git("diff", "-U0", "--no-color", "--no-renames", f"{ns.base}...FETCH_HEAD")), policy)
     dm = demote.demoted_classes(history())
