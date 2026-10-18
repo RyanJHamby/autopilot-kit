@@ -62,8 +62,9 @@ jobs:
         if: steps.chk.outputs.go == 'true'
         run: |
           mkdir -p .autopilot-tmp
-          { echo "## Open issues"; gh issue list --state open --limit 100 --json number,title --jq '.[]|"- #\(.number) \(.title)"';
-            echo; echo "## Recently merged agent/owner PRs"; gh pr list --state merged --limit 20 --json number,title --jq '.[]|"- #\(.number) \(.title)"'; } > .autopilot-tmp/context.md
+          # REST only: the workflow token cannot run the GraphQL queries behind `gh pr list`
+          { echo "## Open issues"; gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&per_page=100" --jq '.[]|select(.pull_request|not)|"- #\(.number) \(.title)"';
+            echo; echo "## Recently merged PRs"; gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&per_page=30" --jq '.[]|select(.merged_at)|"- #\(.number) \(.title)"'; } > .autopilot-tmp/context.md
       - name: sandbox dependencies
         if: steps.chk.outputs.go == 'true'
         run: |

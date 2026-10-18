@@ -157,7 +157,11 @@ def main(argv=None) -> int:
     def gh(*a):
         return subprocess.run(["gh", *a], check=True, capture_output=True, text=True).stdout
 
-    issues = json.loads(gh("issue", "list", "--state", "all", "--limit", "200", "--json", "title,labels,state"))
+    # REST (the workflow token cannot run the GraphQL behind `gh issue list`); the issues endpoint also returns PRs
+    raw_issues = json.loads(gh("api", "repos/{owner}/{repo}/issues?state=all&per_page=100"))
+    issues = [
+        {"title": i["title"], "state": i["state"].upper(), "labels": i["labels"]} for i in raw_issues if "pull_request" not in i
+    ]
     open_titles = [i["title"] for i in issues]
     backlog = sum(1 for i in issues if i["state"] == "OPEN" and any(l["name"] == "agent-ready" for l in i["labels"]))
     raw = open(ns.proposals).read() if os.path.exists(ns.proposals) else "[]"
@@ -169,9 +173,22 @@ def main(argv=None) -> int:
         print(f"{'FILE' if ns.apply else 'would file'} [{label}] {p['title']} (goal {p['goal']})")
         if ns.apply:
             for lab in ("audit", label):
-                subprocess.run(["gh", "label", "create", lab, "--color", "BFD4F2"], capture_output=True)
+                subprocess.run(
+                    ["gh", "api", "repos/{owner}/{repo}/labels", "-f", f"name={lab}", "-f", "color=BFD4F2"], capture_output=True
+                )
             body = f"{p['body']}\n\n---\nGoal: {p['goal']}. Filed by the weekly audit within the repo charter; close it if it is not wanted."
-            gh("issue", "create", "--title", p["title"], "--body", body, "--label", f"audit,{label}")
+            gh(
+                "api",
+                "repos/{owner}/{repo}/issues",
+                "-f",
+                f"title={p['title']}",
+                "-f",
+                f"body={body}",
+                "-f",
+                "labels[]=audit",
+                "-f",
+                f"labels[]={label}",
+            )
     return 0
 
 
