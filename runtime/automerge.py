@@ -150,7 +150,14 @@ def main(argv: list[str] | None = None) -> int:
     # data only: nothing from the PR is executed. The checkout keeps no credentials, so private repos need the token here.
     tok = base64.b64encode(f"x-access-token:{os.environ.get('GH_TOKEN', '')}".encode()).decode()
     try:
-        _git("-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {tok}", "fetch", "-q", "origin", f"pull/{ns.pr}/head")
+        _git(
+            "-c",
+            f"http.https://github.com/.extraheader=AUTHORIZATION: basic {tok}",
+            "fetch",
+            "-q",
+            "origin",
+            f"pull/{ns.pr}/head",
+        )
     except subprocess.CalledProcessError as e:
         print(f"SKIP fetch failed: {e.stderr.strip()[:300]}")
         return 0

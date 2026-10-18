@@ -99,6 +99,15 @@ def _matches(path: str, patterns: list[str]) -> bool:
     return False
 
 
+def _dep_names(ch: "FileChange") -> set[str]:
+    import os, sys
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import charter
+
+    return charter.added_dependencies(ch.path, ch.added, ch.removed)
+
+
 def parse_diff(text: str) -> list[FileChange]:
     """Parse `git diff -U0 --no-color --no-renames` output."""
     changes: list[FileChange] = []
@@ -129,6 +138,7 @@ def analyze(
     protected: list[str] | None = None,
     max_diff_lines: int = DEFAULT_MAX_DIFF_LINES,
     comms_allow: list[str] | None = None,
+    allow_new_dependencies: bool = True,
 ) -> list[Violation]:
     protected = protected if protected is not None else DEFAULT_PROTECTED
     comms_allow = comms_allow or []
@@ -149,6 +159,9 @@ def analyze(
                 for name, rx in _COMMS_RES.items():
                     if rx.search(line):
                         out.append(Violation("comms", ch.path, f"{name}: outbound-comms surface added"))
+        if agent and not allow_new_dependencies:
+            for dep in sorted(_dep_names(ch)):
+                out.append(Violation("new-dependency", ch.path, f"adds package {dep}; the repo charter forbids new dependencies"))
         if _TEST_PATH_RE.search(ch.path):
             removed_asserts += sum(1 for ln in ch.removed if _ASSERT_RE.search(ln))
             added_asserts += sum(1 for ln in ch.added if _ASSERT_RE.search(ln))
@@ -193,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         protected=DEFAULT_PROTECTED + list(guard_cfg.get("extra_protected", []) or []),
         max_diff_lines=int(guard_cfg.get("max_diff_lines", DEFAULT_MAX_DIFF_LINES)),
         comms_allow=list(guard_cfg.get("comms_allow", []) or []),
+        allow_new_dependencies=bool(((cfg.get("charter") or {}).get("allow_new_dependencies", True))),
     )
     if not violations:
         print("autopilot guard: clean")

@@ -63,7 +63,14 @@ def _merge(base: dict, over: dict) -> dict:
 
 
 def decide(
-    cfg: dict, runs: list[dict], open_agent_prs: int, *, role: str, hard: bool = False, now: dt.datetime | None = None
+    cfg: dict,
+    runs: list[dict],
+    open_agent_prs: int,
+    *,
+    role: str,
+    hard: bool = False,
+    now: dt.datetime | None = None,
+    lines_7d: int = 0,
 ) -> Decision:
     """Pure decision function. `runs` = recent completed/queued runs of the agent workflow,
     newest first, each {"created_at": iso8601, "conclusion": str|None, "status": str, "hard": bool}."""
@@ -89,6 +96,11 @@ def decide(
         return Decision(False, f"daily run cap reached ({len(recent)}/{cap}, tier {tier})")
     if open_agent_prs >= int(c["max_open_agent_prs"]) and role == "implementer":
         return Decision(False, f"{open_agent_prs} agent PRs already open (cap {c['max_open_agent_prs']}); review them first")
+    budget = (cfg.get("charter") or {}).get("weekly_lines_budget")
+    if budget and role == "implementer" and lines_7d >= int(budget):
+        return Decision(
+            False, f"weekly line budget used ({lines_7d}/{budget} changed lines merged in 7 days); it resets as the week rolls"
+        )
     n = int(c["breaker_failures"])
     finished = [r for r in runs if r.get("status") == "completed"][:n]
     if len(finished) == n and all(r.get("conclusion") in ("failure", "timed_out", "startup_failure") for r in finished):
@@ -220,7 +232,7 @@ def cmd_dispatch(cfg: dict, issue: int | None, *, gh=None, run=None, sleep=None,
             if not queue:
                 return dispatched
             continue
-        d = decide(cfg, runs, n_agent, role="implementer", hard="hard" in names)
+        d = decide(cfg, runs, n_agent, role="implementer", hard="hard" in names, lines_7d=_lines_7d(cfg, pulls, gh))
         if not d.allow:
             print(f"::notice::autopilot gate closed for #{n}: {d.reason}")
             return dispatched
@@ -245,6 +257,15 @@ def cmd_dispatch(cfg: dict, issue: int | None, *, gh=None, run=None, sleep=None,
         if not queue:
             return dispatched
         sleep(10)
+
+
+def _lines_7d(cfg: dict, pulls: list[dict], gh) -> int:
+    if not (cfg.get("charter") or {}).get("weekly_lines_budget"):
+        return 0  # no budget set: skip the per-PR lookups
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import charter
+
+    return charter.lines_used(pulls, dt.datetime.now(dt.timezone.utc), lambda n: gh("api", f"repos/{{owner}}/{{repo}}/pulls/{n}"))
 
 
 def _gh(*args: str) -> object:
