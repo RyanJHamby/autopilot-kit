@@ -34,6 +34,16 @@ def _gh(*a: str):
     return json.loads(r.stdout) if r.stdout.strip() else []
 
 
+def _check_names(gh, head: str) -> set[str]:
+    """Names of the checks that ran on a PR's own head. Scheduled workflows (audit, ...) attach to whatever commit is the
+    default branch's head when they run, so their failures must not be blamed on the PR merged there. Empty when unknown,
+    in which case every check counts (the safe direction)."""
+    if not head:
+        return set()
+    runs = gh("api", f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page=100")
+    return {c["name"] for c in (runs.get("check_runs", []) if isinstance(runs, dict) else []) if c.get("name")}
+
+
 def history(gh=None) -> list[dict]:
     """Merged PRs labelled automerged:<class>, with revert and red-main flags derived from GitHub (REST only: the
     workflow token lacks GraphQL status scopes)."""
@@ -48,8 +58,10 @@ def history(gh=None) -> list[dict]:
         if not cls or not p.get("merged_at"):
             continue
         sha = p.get("merge_commit_sha") or ""
-        runs = gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs") if sha else {}
-        concl = [c.get("conclusion") for c in (runs.get("check_runs", []) if isinstance(runs, dict) else [])]
+        own = _check_names(gh, (p.get("head") or {}).get("sha") or "")
+        runs = gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100") if sha else {}
+        found = runs.get("check_runs", []) if isinstance(runs, dict) else []
+        concl = [c.get("conclusion") for c in found if not own or c.get("name") in own]
         out.append(
             {
                 "class": cls,
