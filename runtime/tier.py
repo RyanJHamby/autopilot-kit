@@ -168,3 +168,4 @@ if __name__ == "__main__":
 
 # release pipeline smoke test (comment only)
 # release pipeline smoke test 2: first live App-driven run (comment only)
+# release pipeline smoke test 3: first bump to merge with no tap (comment only)
