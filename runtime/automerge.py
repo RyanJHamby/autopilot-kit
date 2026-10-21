@@ -99,7 +99,8 @@ def decide(pr: dict, checks: list[dict], res: dict, enabled: list[str], demoted:
         return False, "not an open, ready PR"
     head = pr["headRefName"]
     owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
-    kit_bump = head.startswith("autopilot/kit-") and bool(owner) and pr["author"]["login"] == owner
+    rollout_bot = "autopilot-rollout[bot]"
+    kit_bump = head.startswith("autopilot/kit-") and bool(owner) and pr["author"]["login"] in (owner, rollout_bot)
     if not (head.startswith("agent/") or kit_bump or pr["author"]["login"] in ("dependabot", "app/dependabot")):
         return False, "only agent/*, dependabot and owner kit-bump PRs are auto-merged"
     bad = [c["name"] for c in checks if c.get("conclusion") not in OK]
