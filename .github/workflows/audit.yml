@@ -64,7 +64,7 @@ jobs:
           mkdir -p .autopilot-tmp
           # REST only: the workflow token cannot run the GraphQL queries behind `gh pr list`
           { echo "## Open issues"; gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&per_page=100" --jq '.[]|select(.pull_request|not)|"- #\(.number) \(.title)"';
-            echo; echo "## Recently merged PRs"; gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&per_page=30" --jq '.[]|select(.merged_at)|"- #\(.number) \(.title)"'; } > .autopilot-tmp/context.md
+            echo; echo "## Recently merged PRs"; gh api "repos/${GITHUB_REPOSITORY}/issues?state=closed&per_page=30" --jq '.[]|select(.pull_request.merged_at)|"- #\(.number) \(.title)"'; } > .autopilot-tmp/context.md
       - name: sandbox dependencies
         if: steps.chk.outputs.go == 'true'
         run: |
