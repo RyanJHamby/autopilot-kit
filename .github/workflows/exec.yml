@@ -20,6 +20,8 @@ permissions: {}
 jobs:
   exec:
     if: vars.AUTOPILOT_ENABLED == 'true' && vars.AUTOPILOT_PAUSED != 'true' && (github.actor == github.repository_owner || github.actor == 'github-actions[bot]')
+    # Secrets live in the main-only `autopilot-exec` Environment so a workflow on an agent/* branch can never read them.
+    environment: autopilot-exec
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -37,6 +39,10 @@ jobs:
       EFFORT: ${{ inputs.effort }}
       MAX_TURNS: ${{ inputs.max_turns }}
     steps:
+      - name: egress audit (start, observe only, never blocks)
+        continue-on-error: true
+        run: sudo resolvectl log-level debug || true
+
       - name: validate inputs
         run: |
           case "$ISSUE" in ""|*[!0-9]*) echo "::error::bad issue"; exit 1;; esac
@@ -167,3 +173,11 @@ jobs:
           # the action rewrites and revokes the git remote credentials, so use the API with the workflow token
           ahead=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${AGENT_BRANCH}" --jq .ahead_by 2>/dev/null || echo "")
           [ "$ahead" = 0 ] && gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${AGENT_BRANCH}" || true
+
+      - name: egress audit (report, hosts this run resolved)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "::group::hosts resolved during this run (input for the egress allowlist)"
+          sudo journalctl -u systemd-resolved --no-pager 2>/dev/null | grep -oE "Looking up RR for [^ ]+" | sed 's/Looking up RR for //; s/\.$//' | sort -u || true
+          echo "::endgroup::"

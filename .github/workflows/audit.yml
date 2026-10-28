@@ -17,6 +17,8 @@ permissions: {}
 jobs:
   audit:
     if: vars.AUTOPILOT_ENABLED == 'true' && vars.AUTOPILOT_PAUSED != 'true' && (github.actor == github.repository_owner || github.event_name == 'schedule')
+    # Secrets live in the main-only `autopilot-exec` Environment so a workflow on an agent/* branch can never read them.
+    environment: autopilot-exec
     runs-on: ubuntu-latest
     timeout-minutes: 12
     permissions:
