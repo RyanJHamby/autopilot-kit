@@ -7,7 +7,7 @@ Copied into each repo as .autopilot/guard.py. The workflow runs the BASE-branch
 copy so an agent PR cannot weaken the guard that judges it.
 
 Checks (all PRs): secrets, outbound-comms code/URLs, test-assertion deletions.
-Extra checks when --agent: protected paths, .mcp.json, diff size cap.
+Extra checks when --agent: protected paths, .mcp.json, diff size cap, append-only paths (guard.append_only: eval fixtures).
 Exit 0 = clean, 1 = violations.
 """
 
@@ -139,6 +139,7 @@ def analyze(
     max_diff_lines: int = DEFAULT_MAX_DIFF_LINES,
     comms_allow: list[str] | None = None,
     allow_new_dependencies: bool = True,
+    append_only: list[str] | None = None,
 ) -> list[Violation]:
     protected = protected if protected is not None else DEFAULT_PROTECTED
     comms_allow = comms_allow or []
@@ -149,6 +150,8 @@ def analyze(
         total += len(ch.added) + len(ch.removed)
         if agent and _matches(ch.path, protected):
             out.append(Violation("protected-path", ch.path, "agents may not modify this path"))
+        if agent and append_only and ch.status != "A" and _matches(ch.path, append_only):
+            out.append(Violation("append-only", ch.path, "eval fixtures/cassettes may be added, never modified or deleted by an agent"))
         if agent and ch.path.endswith(".mcp.json"):
             out.append(Violation("mcp-config", ch.path, "MCP config is forbidden for agents"))
         for line in ch.added:
@@ -206,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         protected=DEFAULT_PROTECTED + list(guard_cfg.get("extra_protected", []) or []),
         max_diff_lines=int(guard_cfg.get("max_diff_lines", DEFAULT_MAX_DIFF_LINES)),
         comms_allow=list(guard_cfg.get("comms_allow", []) or []),
+        append_only=list(guard_cfg.get("append_only", []) or []),
         allow_new_dependencies=bool(((cfg.get("charter") or {}).get("allow_new_dependencies", True))),
     )
     if not violations:
