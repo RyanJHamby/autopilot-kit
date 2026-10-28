@@ -75,7 +75,7 @@ def _is_lock_patch(ch: FileChange) -> bool:
 
 
 KIT_CALLERS = {
-    f".github/workflows/{n}.yml" for n in ("agent-exec", "agent-dispatch", "guard", "handshake", "automerge", "improve", "audit")
+    f".github/workflows/{n}.yml" for n in ("agent-exec", "agent-dispatch", "guard", "handshake", "automerge", "improve", "audit", "rebase")
 }
 _SHA = re.compile(r"[0-9a-f]{40}")
 _MANIFEST_LINE = re.compile(r'^\s*"\.github/workflows/[\w.-]+\.yml":\s*"[0-9a-f]{64}",?\s*$')
