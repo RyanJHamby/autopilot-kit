@@ -6,7 +6,7 @@
 Copied into each repo as .autopilot/guard.py. The workflow runs the BASE-branch
 copy so an agent PR cannot weaken the guard that judges it.
 
-Checks (all PRs): secrets, outbound-comms code/URLs, test-assertion deletions.
+Checks (all PRs): secrets, outbound-comms code/URLs, test-assertion deletions, merge-conflict markers in added lines.
 Extra checks when --agent: protected paths, .mcp.json, diff size cap, append-only paths (guard.append_only: eval fixtures).
 Exit 0 = clean, 1 = violations.
 """
@@ -69,6 +69,10 @@ _SECRET_RES = {k: re.compile(v) for k, v in SECRET_PATTERNS.items()}
 _COMMS_RES = {k: re.compile(v) for k, v in COMMS_PATTERNS.items()}
 _ASSERT_RE = re.compile(r"\b(assert\w*|expect\(|\.should|self\.assert\w+|def test_\w+|\bit\(['\"]|\btest\(['\"])")
 _TEST_PATH_RE = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|[._-](test|spec)\.\w+$")
+# An unresolved merge left in a file: `<<<<<<< x`, `>>>>>>> x`, `||||||| x` (diff3) or a line that is exactly `=======`.
+# No path is exempt: a test or doc that needs to show one can build it from pieces ("<" * 7) instead of writing it at line start.
+_MARKER_RE = re.compile(r"^(?:(?:<{7}|>{7}|\|{7}) |={7}$)")
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 @dataclass
@@ -77,6 +81,7 @@ class FileChange:
     status: str = "M"  # A, M, D, R
     added: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    added_at: list[int] = field(default_factory=list)  # new-file line number of each added line (from hunk headers), when known
 
 
 @dataclass
@@ -84,9 +89,11 @@ class Violation:
     check: str
     path: str
     detail: str
+    line: int | None = None
 
     def __str__(self) -> str:
-        return f"[{self.check}] {self.path}: {self.detail}"
+        where = f"{self.path}:{self.line}" if self.line else self.path
+        return f"[{self.check}] {where}: {self.detail}"
 
 
 def _matches(path: str, patterns: list[str]) -> bool:
@@ -112,6 +119,7 @@ def parse_diff(text: str) -> list[FileChange]:
     """Parse `git diff -U0 --no-color --no-renames` output."""
     changes: list[FileChange] = []
     cur: FileChange | None = None
+    at = 0
     for line in text.splitlines():
         if line.startswith("diff --git "):
             cur = FileChange(path=line.split(" b/", 1)[-1])
@@ -124,8 +132,14 @@ def parse_diff(text: str) -> list[FileChange]:
             cur.status = "D"
         elif line.startswith("+++ ") or line.startswith("--- "):
             continue
+        elif m := _HUNK_RE.match(line):
+            at = int(m.group(1))
         elif line.startswith("+"):
             cur.added.append(line[1:])
+            cur.added_at.append(at)
+            at += 1
+        elif line.startswith(" "):
+            at += 1  # a context line (guard itself diffs with -U0, so only other callers have these)
         elif line.startswith("-"):
             cur.removed.append(line[1:])
     return changes
@@ -154,7 +168,10 @@ def analyze(
             out.append(Violation("append-only", ch.path, "eval fixtures/cassettes may be added, never modified or deleted by an agent"))
         if agent and ch.path.endswith(".mcp.json"):
             out.append(Violation("mcp-config", ch.path, "MCP config is forbidden for agents"))
-        for line in ch.added:
+        for i, line in enumerate(ch.added):
+            if _MARKER_RE.match(line):
+                n = ch.added_at[i] if i < len(ch.added_at) else None
+                out.append(Violation("conflict-marker", ch.path, "unresolved merge-conflict marker in an added line", n))
             for name, rx in _SECRET_RES.items():
                 if rx.search(line):
                     out.append(Violation("secret", ch.path, f"possible {name} in added line"))
@@ -218,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     print("autopilot guard: FAILED")
     for v in violations:
         print(f"  - {v}")
-        print(f"::error file={v.path}::{v.check}: {v.detail}")
+        print(f"::error file={v.path}{f',line={v.line}' if v.line else ''}::{v.check}: {v.detail}")
     return 1
 
 
