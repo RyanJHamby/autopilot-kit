@@ -5,6 +5,8 @@
 
 Merges PR N only if ALL hold: agent/*, dependabot or owner `autopilot/kit-*` PR, open, not draft, every other check green, tier.py says tier 0
 for a class the owner enabled in merge-policy.yaml (read from the base branch), and that class is not demoted.
+In a repo whose `.autopilot/repo.yaml` (base branch, owner-only) says `mode: yolo`, a green tier-1 change on an agent/* branch also
+merges, as class `yolo-code`, which demotes like any other class. Tier 2 (protected paths) never auto-merges.
 Merge method is a merge commit. Marks the merge with label `automerged:<class>` so history (and demotion) can be derived.
 
   automerge.py --pr N --head-sha SHA --policy merge-policy.yaml [--dry-run]
@@ -106,7 +108,23 @@ def fetch_approved(kit_repo: str, opener=None) -> list[str]:
     return [ln.split()[0] for ln in text.splitlines() if re.match(r"^[0-9a-f]{40}(\s|$)", ln)]
 
 
-def decide(pr: dict, checks: list[dict], res: dict, enabled: list[str], demoted: dict[str, str]) -> tuple[bool, str]:
+YOLO_CLASS = "yolo-code"
+
+
+def repo_mode(path: str = ".autopilot/repo.yaml") -> str:
+    """`mode` from the base-branch copy of repo.yaml (owner-only file); anything unreadable counts as standard."""
+    try:
+        import yaml
+
+        with open(path) as fh:
+            return str((yaml.safe_load(fh) or {}).get("mode") or "standard").strip()
+    except Exception:
+        return "standard"
+
+
+def decide(
+    pr: dict, checks: list[dict], res: dict, enabled: list[str], demoted: dict[str, str], mode: str = "standard"
+) -> tuple[bool, str]:
     if pr["state"] != "OPEN" or pr.get("isDraft"):
         return False, "not an open, ready PR"
     head = pr["headRefName"]
@@ -118,6 +136,10 @@ def decide(pr: dict, checks: list[dict], res: dict, enabled: list[str], demoted:
     bad = [c["name"] for c in checks if c.get("conclusion") not in OK]
     if bad:
         return False, f"checks not green: {bad}"
+    if res["tier"] == 1 and mode == "yolo" and head.startswith("agent/"):
+        if YOLO_CLASS in demoted:
+            return False, f"class {YOLO_CLASS} demoted: {demoted[YOLO_CLASS]}"
+        return True, YOLO_CLASS
     if res["tier"] != 0:
         return False, f"tier {res['tier']}: {'; '.join(res['reasons'])}"
     cls = res["class"]
@@ -138,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     ns = ap.parse_args(argv)
     policy = tier._load_policy(ns.policy)
     enabled = list(policy.get("auto_merge_classes") or [])
-    if not enabled:
+    mode = repo_mode()
+    if not enabled and mode != "yolo":
         print("no auto-merge classes enabled; nothing to do")
         return 0
     raw = _gh("api", f"repos/{{owner}}/{{repo}}/pulls/{ns.pr}")
@@ -177,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     policy = {**policy, "kit_approved": fetch_approved(os.environ.get("KIT_REPO", ""))}
     res = tier.classify(parse_diff(_git("diff", "-U0", "--no-color", "--no-renames", f"{ns.base}...FETCH_HEAD")), policy)
     dm = demote.demoted_classes(history())
-    ok, why = decide(pr, checks, res, enabled, dm)
+    ok, why = decide(pr, checks, res, enabled, dm, mode)
     print(("MERGE " if ok else "SKIP ") + why)
     if ok and not ns.dry_run:
         # labels are the history demotion is derived from, so add them BEFORE merging
